@@ -36,8 +36,6 @@ func buttons(_ g: GCExtendedGamepad) -> [(Bool, CGKeyCode)] {
      (g.rightShoulder.isPressed, K.kp3),              // R1
      (g.leftThumbstickButton?.isPressed ?? false, K.kp7),   // L3
      (g.rightThumbstickButton?.isPressed ?? false, K.kp9),  // R3
-     (g.buttonOptions?.isPressed ?? false, K.kpDecimal),    // Create
-     ((g as? GCDualSenseGamepad)?.touchpadButton.isPressed ?? false, K.kpMultiply),
      (g.buttonMenu.isPressed, K.escape)]              // Options
 }
 
@@ -86,7 +84,34 @@ func move(_ x: Float, _ y: Float) {
     if settled >= settleTicks { tap(walk ? K.kpDivide : K.kp2); wantWalk = walk; settling = nil }
 }
 
+// Touchpad: a click in one of four quadrants, decided by where the finger is when the click starts and
+// held until it lets go. Top: kpMultiply (left) / kpDecimal (right); bottom: the same with Shift.
+// Pressed at the very edge the pad can report no finger (0, 0): that click is ignored.
+var zone: (code: CGKeyCode, shift: Bool)?
+var clickHeld = false
+func zoneKey(_ z: (code: CGKeyCode, shift: Bool), _ isDown: Bool) {
+    guard let e = CGEvent(keyboardEventSource: src, virtualKey: z.code, keyDown: isDown) else { return }
+    e.flags = flags.union(z.shift ? [.maskShift, .maskNumericPad] : .maskNumericPad)
+    e.post(tap: .cghidEventTap)
+}
+func touchpad(_ g: GCExtendedGamepad) {
+    guard let ds = g as? GCDualSenseGamepad else { return }
+    let pressed = ds.touchpadButton.isPressed
+    if pressed, !clickHeld {
+        clickHeld = true
+        let x = ds.touchpadPrimary.xAxis.value, y = ds.touchpadPrimary.yAxis.value   // -1...1, y up
+        if x != 0 || y != 0 {
+            let z = (code: x < 0 ? K.kpMultiply : K.kpDecimal, shift: y < 0)
+            zone = z; zoneKey(z, true)
+        }
+    } else if !pressed, clickHeld {
+        clickHeld = false
+        if let z = zone { zone = nil; zoneKey(z, false) }
+    }
+}
+
 func releaseAll() {
+    if let z = zone { zone = nil; zoneKey(z, false) }
     for c in down where c != K.option && c != K.control { post(c, false) }
     if down.contains(K.option) { post(K.option, false) }
     if down.contains(K.control) { post(K.control, false) }
@@ -122,13 +147,23 @@ if CommandLine.arguments.contains("--selftest") {
 if CommandLine.arguments.contains("--calibrate") {
     guard let wow = NSWorkspace.shared.runningApplications.first(where: { $0.bundleURL?.lastPathComponent == "World of Warcraft.app" })
     else { print("wow-pad: WoW isn't running"); exit(1) }
+    // the running wow-pad would send its own keys into the learning (a touched stick): pause it meanwhile
+    let me = getpid()
+    let pg = Process(); let out = Pipe()
+    pg.launchPath = "/usr/bin/pgrep"; pg.arguments = ["-x", "wow-pad"]; pg.standardOutput = out
+    try? pg.run(); pg.waitUntilExit()
+    let paused = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        .split(separator: "\n").compactMap { pid_t($0) }.filter { $0 != me }
+    paused.forEach { kill($0, SIGSTOP) }
     wow.activate()
     usleep(1_500_000)
-    guard wowInFront() else { print("wow-pad: couldn't bring WoW to the front"); exit(1) }
+    guard wowInFront() else { paused.forEach { kill($0, SIGCONT) }; print("wow-pad: couldn't bring WoW to the front"); exit(1) }
     tap(0x2C); usleep(400_000)                    // "/" opens chat with the slash (Return may be bound)
     type("padbar learn"); tap(0x24); usleep(1_000_000)
     for code in calibration { tap(code); usleep(250_000) }
-    print("wow-pad: sent \(calibration.count) keys"); exit(0)
+    print("wow-pad: sent \(calibration.count) keys")
+    paused.forEach { kill($0, SIGCONT) }
+    exit(0)
 }
 
 setvbuf(stdout, nil, _IONBF, 0)
@@ -147,6 +182,7 @@ Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { _ in
     set(K.option, g.leftTrigger.isPressed)
     set(K.control, g.rightTrigger.isPressed)
     for (pressed, code) in buttons(g) { set(code, pressed) }
+    touchpad(g)
     move(g.leftThumbstick.xAxis.value, g.leftThumbstick.yAxis.value)
     look(g.rightThumbstick.xAxis.value, g.rightThumbstick.yAxis.value)
 }

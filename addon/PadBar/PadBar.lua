@@ -23,7 +23,9 @@ local BUTTONS = {
     { "left",     "arrow",    -164,   0, S, math.pi / 2 }, { "right", "arrow", -72, 0, S, -math.pi / 2 },
     { "l1",       "L1",       -118, 100, M }, { "r1", "R1",  118, 100, M },
     { "l3",       "L3",        -40, -70, M }, { "r3", "R3",   40, -70, M },
-    { "create",   "CR",        -26,  30, M }, { "touch", "PAD", 26, 30, M },
+    -- the touchpad's four quadrants (a click there, wherever the finger is)
+    { "tpTL", "TL", -38, 98, 26 }, { "tpTR", "TR", 38, 98, 26 },
+    { "tpBL", "BL", -38, 66, 26 }, { "tpBR", "BR", 38, 66, 26 },
 }
 local GLYPH_COLOR = { cross = { 0.45, 0.65, 1 }, circle = { 1, 0.4, 0.4 }, square = { 1, 0.55, 0.85 }, triangle = { 0.3, 0.9, 0.7 } }
 local LAYERS = { { "", "Base" }, { "ALT-", "L2" }, { "CTRL-", "R2" }, { "ALT-CTRL-", "L2+R2" } }
@@ -58,6 +60,20 @@ local BINDING_ICONS = {   -- our own (media/act_*), so WoW actions don't look li
     JUMP = MEDIA .. "act_jump", INTERACTTARGET = MEDIA .. "act_interact",
     TARGETNEARESTFRIEND = MEDIA .. "act_friend", TARGETNEARESTENEMY = MEDIA .. "act_enemy",
 }
+-- WoW actions the right-click menu offers (any this client doesn't have is left out), and the short
+-- label a button shows for one without its own icon
+local ACTIONS = { "TOGGLEWORLDMAP", "TOGGLECHARACTER0", "OPENALLBAGS", "TOGGLEBACKPACK", "TOGGLESPELLBOOK",
+    "TOGGLEQUESTLOG", "TOGGLETALENTS", "TOGGLEPROFESSIONBOOK", "TOGGLESOCIAL", "TOGGLEGUILDTAB", "TOGGLEDUNGEONSANDRAIDS",
+    "TOGGLEACHIEVEMENT", "TOGGLECOLLECTIONS", "TOGGLEMINIMAP", "TOGGLEGAMEMENU", "TOGGLEAUTORUN", "TOGGLERUN", "SITORSTAND",
+    "TOGGLESHEATH", "JUMP", "INTERACTTARGET", "TARGETNEARESTENEMY", "TARGETNEARESTFRIEND", "TARGETPREVIOUSENEMY",
+    "ASSISTTARGET", "FOLLOWTARGET" }
+local SHORT = { TOGGLEWORLDMAP = "MAP", TOGGLECHARACTER0 = "CHAR", OPENALLBAGS = "BAGS", TOGGLEBACKPACK = "BAG",
+    TOGGLESPELLBOOK = "BOOK", TOGGLEQUESTLOG = "QUEST", TOGGLETALENTS = "TAL", TOGGLEPROFESSIONBOOK = "PROF",
+    TOGGLESOCIAL = "SOC", TOGGLEGUILDTAB = "GUILD", TOGGLEDUNGEONSANDRAIDS = "LFG", TOGGLEACHIEVEMENT = "ACH",
+    TOGGLECOLLECTIONS = "COLL", TOGGLEMINIMAP = "MINI", TOGGLEGAMEMENU = "MENU", TOGGLEAUTORUN = "AUTO",
+    TOGGLERUN = "WALK", SITORSTAND = "SIT", TOGGLESHEATH = "WEAP", TARGETPREVIOUSENEMY = "PREV",
+    ASSISTTARGET = "ASST", FOLLOWTARGET = "FOLW" }
+
 -- what a button does: its assignment, else its default ("none": a default turned off)
 local function Assign(layer, id)
     local a = PadBarDB.assign[layer] and PadBarDB.assign[layer][id]
@@ -66,6 +82,9 @@ local function Assign(layer, id)
     if type(d) == "table" then return d end
     if d then return { type = "binding", cmd = d } end
 end
+-- touchpad zones are the two keys Create and the touchpad click used to send (still learned under those
+-- names), the bottom row with Shift
+local ZONES = { tpTL = { "touch" }, tpTR = { "create" }, tpBL = { "touch", "SHIFT-" }, tpBR = { "create", "SHIFT-" } }
 local function Key(id)
     for i, name in ipairs(ORDER) do if name == id then return PadBarKeys and PadBarKeys[i] end end
 end
@@ -90,6 +109,20 @@ local function Cooldown(a)
     end
 end
 
+-- spells: a duration object (in combat cooldown numbers are secret values addons can't use; the
+-- object goes to the cooldown widget as is); items: plain numbers
+local function ShowCooldown(cd, a)
+    if a and a.type == "spell" and C_Spell and C_Spell.GetSpellCooldownDuration and cd.SetCooldownFromDurationObject then
+        local ok = pcall(function()
+            local d = C_Spell.GetSpellCooldownDuration(a.id)
+            if d then cd:SetCooldownFromDurationObject(d) else cd:Clear() end
+        end)
+        if ok then return end
+    end
+    local start, dur = Cooldown(a)
+    if start then pcall(cd.SetCooldown, cd, start, dur) else cd:Clear() end
+end
+
 -- held L2/R2 show their layer, else the tab being edited
 local function ShownLayer()
     local alt, ctrl = IsAltKeyDown(), IsControlKeyDown()
@@ -102,14 +135,17 @@ local function Refresh()
     local layer = ShownLayer()
     for _, b in ipairs(BUTTONS) do
         local s, a = slots[b[1]], Assign(layer, b[1])
-        local icon = Icon(a)
+        local label = a and a.type == "binding" and not BINDING_ICONS[a.cmd] and (SHORT[a.cmd] or a.cmd:sub(1, 4))
+        local icon = not label and Icon(a)
         s.icon:SetTexture(icon or nil)
-        s.icon:SetShown(icon ~= nil)
-        s.big:SetShown(not icon)
-        s.badgeBg:SetShown(icon ~= nil)
-        s.badge:SetShown(icon ~= nil)
-        local start, dur = Cooldown(a)
-        if start then pcall(s.cd.SetCooldown, s.cd, start, dur) else s.cd:Clear() end
+        s.icon:SetShown(icon ~= nil and icon ~= false)
+        s.text:SetText(label or "")
+        s.text:SetShown(label ~= nil and label ~= false)
+        local filled = (icon or label) and true or false
+        s.big:SetShown(not filled)
+        s.badgeBg:SetShown(filled)
+        s.badge:SetShown(filled)
+        ShowCooldown(s.cd, a)
     end
     for i, tab in ipairs(pad.tabs) do
         local on = i == layer
@@ -149,6 +185,7 @@ local DIALOGS = {
     QuestFrame = "CloseQuest", MerchantFrame = "CloseMerchant", ClassTrainerFrame = "CloseTrainer", TaxiFrame = "CloseTaxiMap",
     BankFrame = "CloseBankFrame", MailFrame = "CloseMail", TabardFrame = "CloseTabardCreation", PetStableFrame = "ClosePetStables",
     ItemTextFrame = "CloseItemText", GuildRegistrarFrame = "CloseGuildRegistrar", PetitionFrame = "ClosePetition",
+    LootFrame = "CloseLoot",
 }
 local function DialogOpen()
     for name in pairs(DIALOGS) do
@@ -179,6 +216,130 @@ local function UpdateBack()
     SetOverrideBindingClick(owner, true, key, open and "PadBarCloseDialog" or secure[1].circle:GetName(), "LeftButton")
 end
 
+local function BindNormal(layer, id)
+    local z, a = ZONES[id], Assign(layer, id)
+    local key = Key(z and z[1] or id)
+    if not key then return end
+    key = LAYERS[layer][1] .. (z and z[2] or "") .. key
+    if a and a.type == "binding" then SetOverrideBinding(owner, true, key, a.cmd)
+    else SetOverrideBindingClick(owner, true, key, secure[layer][id]:GetName(), "LeftButton") end
+end
+
+-- Menu mode: while loot, a quest or an NPC's dialog is open (out of combat), the d-pad moves a
+-- highlight through its options, ✕ picks one, □ does the main thing (loot all, accept, complete,
+-- continue); ○ closes (UpdateBack). Picking clicks Blizzard's own buttons or calls LootSlot: none is
+-- protected, so nothing gets locked.
+local function Shown(f) return f and f.IsShown and f:IsShown() end
+local menuMode, sel = nil, 1
+local function MenuMode()
+    if Shown(LootFrame) then return "loot" end
+    if Shown(QuestFrame) then return "quest" end
+    if Shown(GossipFrame) then return "gossip" end
+end
+local function MenuOptions()
+    local list = {}
+    local function add(b)
+        if b and b.IsVisible and b:IsVisible() and (not b.IsEnabled or b:IsEnabled()) then list[#list + 1] = b end
+    end
+    if menuMode == "loot" then
+        local sb = LootFrame.ScrollBox
+        if sb and sb.ForEachFrame then sb:ForEachFrame(add) else for i = 1, GetNumLootItems() or 0 do add(_G["LootButton" .. i]) end end
+    elseif menuMode == "quest" then
+        if Shown(QuestFrameGreetingPanel) then
+            local pool = QuestFrameGreetingPanel.titleButtonPool
+            if pool and pool.EnumerateActive then for b in pool:EnumerateActive() do add(b) end
+            else for i = 1, 32 do add(_G["QuestTitleButton" .. i]) end end
+        elseif Shown(QuestFrameRewardPanel) then
+            for i = 1, GetNumQuestChoices and GetNumQuestChoices() or 0 do add(_G["QuestInfoRewardsFrameQuestInfoItem" .. i]) end
+        end
+    elseif menuMode == "gossip" then
+        local sb = GossipFrame.GreetingPanel and GossipFrame.GreetingPanel.ScrollBox
+        if sb and sb.ForEachFrame then
+            sb:ForEachFrame(function(b) if b.GetScript and b:GetScript("OnClick") then add(b) end end)
+        else for i = 1, 32 do add(_G["GossipTitleButton" .. i]) end end
+    end
+    table.sort(list, function(x, y) return (x:GetTop() or 0) > (y:GetTop() or 0) end)
+    return list
+end
+
+local hl = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+hl:SetFrameStrata("TOOLTIP")
+hl:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 2 })
+hl:SetBackdropBorderColor(1, 0.82, 0, 0.95)
+hl:Hide()
+local function Highlight()
+    local list = menuMode and MenuOptions() or {}
+    if #list == 0 then hl:Hide() return list end
+    sel = math.max(1, math.min(sel, #list))
+    hl:ClearAllPoints()
+    hl:SetPoint("TOPLEFT", list[sel], "TOPLEFT", -3, 3)
+    hl:SetPoint("BOTTOMRIGHT", list[sel], "BOTTOMRIGHT", 3, -3)
+    hl:Show()
+    return list
+end
+
+-- Out of range: the icon tints red, as on the action bars. In combat the answer can be a secret value
+-- addons can't test, so it goes straight to SetAlphaFromBoolean.
+local OOR = 0.5
+local function UpdateRange()
+    if not pad or not pad:IsShown() then return end
+    local layer, target = ShownLayer(), UnitExists("target")
+    for _, b in ipairs(BUTTONS) do
+        local s, a = slots[b[1]], Assign(layer, b[1])
+        local r
+        if target and a and a.type == "spell" and C_Spell and C_Spell.IsSpellInRange then r = C_Spell.IsSpellInRange(a.id, "target") end
+        if issecretvalue and issecretvalue(r) then s.oor:SetAlphaFromBoolean(r, 0, OOR)
+        else s.oor:SetAlpha(r == false and OOR or 0) end
+    end
+end
+
+local function Click(b) if b and b.Click then b:Click("LeftButton") end end
+local function Primary()
+    if menuMode == "loot" then
+        for i = GetNumLootItems() or 0, 1, -1 do LootSlot(i) end
+    elseif menuMode == "quest" then
+        if Shown(QuestFrameDetailPanel) then if QuestFrameAcceptButton then Click(QuestFrameAcceptButton) else AcceptQuest() end
+        elseif Shown(QuestFrameProgressPanel) then if QuestFrameCompleteButton then Click(QuestFrameCompleteButton) else CompleteQuest() end
+        elseif Shown(QuestFrameRewardPanel) then Click(QuestFrameCompleteQuestButton)
+        else Click(Highlight()[sel]) end
+    else
+        Click(Highlight()[sel])
+    end
+end
+local function Select()
+    local list = Highlight()
+    if #list == 0 then return Primary() end   -- (a quest's text: ✕ accepts/continues too)
+    if menuMode == "loot" then
+        -- loot rows in order are the slots with something in them
+        local n = 0
+        for i = 1, GetNumLootItems() or 0 do
+            if LootSlotHasItem == nil or LootSlotHasItem(i) then n = n + 1 if n == sel then return LootSlot(i) end end
+        end
+    else Click(list[sel]) end
+end
+local nav = {}
+for id, fn in pairs({ up = function() sel = sel - 1 Highlight() end, down = function() sel = sel + 1 Highlight() end,
+                      cross = Select, square = Primary }) do
+    local b = CreateFrame("Button", "PadBarMenu" .. id, UIParent)
+    b:RegisterForClicks("AnyDown")
+    b:SetScript("OnClick", function() fn() C_Timer.After(0.1, Highlight) end)
+    nav[id] = b
+end
+local function UpdateMenu()
+    if InCombatLockdown() or not secure[1] then return end
+    local mode = MenuMode()
+    if mode ~= menuMode then
+        menuMode, sel = mode, 1
+        for id, b in pairs(nav) do
+            local key = Key(id)
+            if key then
+                if mode then SetOverrideBindingClick(owner, true, key, b:GetName(), "LeftButton") else BindNormal(1, id) end
+            end
+        end
+    end
+    if menuMode then Highlight() else hl:Hide() end
+end
+
 local function ApplyAll()
     if InCombatLockdown() then pending = true return end
     pending = false
@@ -186,9 +347,7 @@ local function ApplyAll()
     for layer, l in ipairs(LAYERS) do
         for _, b in ipairs(BUTTONS) do
             ApplySecure(layer, b[1])
-            local key, a = Key(b[1]), Assign(layer, b[1])
-            if key and a and a.type == "binding" then SetOverrideBinding(owner, true, l[1] .. key, a.cmd)
-            elseif key then SetOverrideBindingClick(owner, true, l[1] .. key, secure[layer][b[1]]:GetName(), "LeftButton") end
+            BindNormal(layer, b[1])
         end
         for id, action in pairs(MOVES) do
             local key = Key(id)
@@ -200,8 +359,9 @@ local function ApplyAll()
         end
     end
     ApplyWalk()
-    backOnClose = nil
+    backOnClose, menuMode = nil, nil
     UpdateBack()
+    UpdateMenu()
 end
 
 local function SetAssign(layer, id, a)
@@ -227,6 +387,31 @@ local function Drop(slot)
     ClearCursor()
 end
 
+-- Clear: a default turns off; anything else goes back to the default (or empty)
+local function Clear(layer, id)
+    local stored = PadBarDB.assign[layer] and PadBarDB.assign[layer][id]
+    local default = layer == 1 and DEFAULTS[id]
+    SetAssign(layer, id, (default and not stored) and { type = "none" } or nil)
+end
+
+-- right-click: a WoW action (map, character, bags...) for this button, or Clear
+local function ActionMenu(slot)
+    local layer = ShownLayer()
+    if not (MenuUtil and MenuUtil.CreateContextMenu) then return Clear(layer, slot.id) end
+    MenuUtil.CreateContextMenu(slot, function(_, root)
+        root:CreateTitle(LAYERS[layer][2] .. " layer")
+        for _, cmd in ipairs(ACTIONS) do
+            if _G["BINDING_NAME_" .. cmd] then
+                root:CreateButton(GetBindingText(cmd, "BINDING_NAME_"), function()
+                    SetAssign(layer, slot.id, { type = "binding", cmd = cmd })
+                end)
+            end
+        end
+        root:CreateDivider()
+        root:CreateButton("Clear", function() Clear(layer, slot.id) end)
+    end)
+end
+
 local function Tooltip(slot)
     local a = Assign(ShownLayer(), slot.id)
     GameTooltip:SetOwner(slot, "ANCHOR_TOP")
@@ -236,7 +421,7 @@ local function Tooltip(slot)
     elseif a and a.type == "binding" then GameTooltip:SetText(GetBindingText(a.cmd, "BINDING_NAME_"))
     elseif a and a.type == "macrotext" then GameTooltip:SetText(a.name)
     else GameTooltip:SetText("Drag a spell, item or macro here") end
-    GameTooltip:AddLine("Layer " .. LAYERS[ShownLayer()][2] .. ": hold L2/R2 or pick a tab. Right-click clears.", 0.6, 0.6, 0.6)
+    GameTooltip:AddLine("Layer " .. LAYERS[ShownLayer()][2] .. ": hold L2/R2 or pick a tab. Right-click: WoW actions or Clear.", 0.6, 0.6, 0.6)
     GameTooltip:Show()
 end
 
@@ -266,7 +451,7 @@ end
 
 local function Build()
     pad = CreateFrame("Frame", "PadBarFrame", UIParent)
-    pad:SetSize(400, 250)
+    pad:SetSize(400, 280)
     pad:SetFrameStrata("MEDIUM")
     pad:SetMovable(true)
     pad:SetClampedToScreen(true)
@@ -274,9 +459,25 @@ local function Build()
     if pos then pad:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4]) else pad:SetPoint("CENTER") end
 
     -- drag grip (top centre)
+    -- the touchpad, top centre between L1 and R1 as on the controller, its four zones behind lines
+    local tp = CreateFrame("Frame", nil, pad, "BackdropTemplate")
+    tp:SetSize(150, 70)
+    tp:SetPoint("CENTER", 0, 82)
+    tp:SetFrameLevel(pad:GetFrameLevel())
+    tp:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    tp:SetBackdropColor(0.04, 0.04, 0.06, 0.75)
+    tp:SetBackdropBorderColor(0.55, 0.5, 0.4, 0.9)
+    for _, v in ipairs({ { 1, 58 }, { 136, 1 } }) do   -- the zone dividers
+        local line = tp:CreateTexture(nil, "ARTWORK")
+        line:SetColorTexture(0.55, 0.5, 0.4, 0.35)
+        line:SetSize(v[1], v[2])
+        line:SetPoint("CENTER")
+    end
+
     local grip = CreateFrame("Button", nil, pad)
     grip:SetSize(70, 14)
-    grip:SetPoint("CENTER", 0, 72)
+    grip:SetPoint("CENTER", 0, 125)
     grip.t = grip:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     grip.t:SetPoint("CENTER")
     grip.t:SetText("· · · ·")
@@ -310,6 +511,9 @@ local function Build()
         s.ring:SetAllPoints()
         s.ring:SetVertexColor(0.55, 0.5, 0.4, 0.9)
         s.big = Glyph(s, b, size * 0.5, "ARTWORK")          -- the glyph alone while empty
+        s.text = s:CreateFontString(nil, "ARTWORK", size >= S and "GameFontNormal" or "GameFontNormalSmall")   -- a WoW action's label
+        s.text:SetPoint("CENTER")
+        s.text:SetTextColor(0.6, 0.85, 1)
         s.big:SetPoint("CENTER")
         local bs = size >= S and 20 or 16                    -- the glyph badge over an icon
         s.badgeBg = Disc(s, "OVERLAY", bs, 0.02, 0.02, 0.03, 0.95)
@@ -318,6 +522,10 @@ local function Build()
         s.badge = Glyph(s, b, bs * 0.7)
         s.badge:SetDrawLayer("OVERLAY", 3)
         s.badge:SetPoint("CENTER", s.badgeBg)
+        s.oor = Disc(s, "ARTWORK", size - 4, 0.85, 0.05, 0.05, 1)   -- out-of-range tint (alpha set by UpdateRange)
+        s.oor:SetDrawLayer("ARTWORK", 2)
+        s.oor:SetPoint("CENTER")
+        s.oor:SetAlpha(0)
         s.cd = CreateFrame("Cooldown", nil, s, "CooldownFrameTemplate")
         s.cd:SetPoint("CENTER")
         s.cd:SetSize(size - 4, size - 4)
@@ -327,13 +535,7 @@ local function Build()
         s.flash:Hide()
         s:SetScript("OnReceiveDrag", Drop)
         s:SetScript("OnClick", function(self, button)
-            if button == "RightButton" then
-                -- a default turns off; anything else goes back to the default (or empty)
-                local layer = ShownLayer()
-                local stored = PadBarDB.assign[layer] and PadBarDB.assign[layer][self.id]
-                local default = layer == 1 and DEFAULTS[self.id]
-                SetAssign(layer, self.id, (default and not stored) and { type = "none" } or nil)
-            else Drop(self) end
+            if button == "RightButton" then ActionMenu(self) else Drop(self) end
         end)
         s:SetScript("OnEnter", Tooltip)
         s:SetScript("OnLeave", GameTooltip_Hide)
@@ -432,6 +634,8 @@ owner:RegisterEvent("PLAYER_REGEN_ENABLED")
 owner:RegisterEvent("MODIFIER_STATE_CHANGED")
 owner:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 owner:RegisterEvent("BAG_UPDATE_COOLDOWN")
+owner:RegisterEvent("ACTIONBAR_UPDATE_COOLDOWN")
+owner:RegisterEvent("PLAYER_TARGET_CHANGED")
 owner:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
         PadBarDB = PadBarDB or {}
@@ -440,7 +644,7 @@ owner:SetScript("OnEvent", function(_, event)
         Build()
         ApplyAll()
         Refresh()
-        C_Timer.NewTicker(0.2, UpdateBack)
+        C_Timer.NewTicker(0.2, function() UpdateBack() UpdateMenu() UpdateRange() end)
         if not PadBarKeys then Print("wow-pad's keys aren't learned yet: run wow-pad --calibrate (it types /padbar learn for you).") end
         -- settings that assume WoW sees the controller, which it no longer does: soft targeting (□'s
         -- interact with what's in front of you) was "gamepad only", and the camera swung behind you
@@ -448,6 +652,8 @@ owner:SetScript("OnEvent", function(_, event)
         for _, c in ipairs({ { "SoftTargetInteract", "1", "3" }, { "SoftTargetEnemy", "1", "3" }, { "cameraSmoothStyle", "4", "0" } }) do
             if GetCVar(c[1]) == c[2] then SetCVar(c[1], c[3]) end
         end
+        -- a removed lock-on mode had turned on ActionCam target focus (the camera swinging to targets)
+        if GetCVar("test_cameraTargetFocusEnemyEnable") == "1" then SetCVar("test_cameraTargetFocusEnemyEnable", "0") end
         -- WoW's own controller support would read the pad too (and its Gamepad UI taints)
         if GetCVar("GamePadEnable") == "1" then
             SetCVar("GamePadEnable", "0")
@@ -457,6 +663,7 @@ owner:SetScript("OnEvent", function(_, event)
         if pending then ApplyAll() Refresh() end
     else
         Refresh()
+        UpdateRange()   -- (a new target, or L2/R2 showing another layer)
     end
 end)
 

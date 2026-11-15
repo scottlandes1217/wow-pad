@@ -16,7 +16,8 @@ types, and the PadBar addon binds those keys to your spells and draws the pad.
 
 | Controller | Does |
 |---|---|
-| ✕ ○ □ △, D-pad, L1/R1, L3/R3, Create, touchpad | Whatever you put on them (defaults below) |
+| ✕ ○ □ △, D-pad, L1/R1, L3/R3 | Whatever you put on them (defaults below) |
+| Touchpad | Click a quadrant (top-left, top-right, bottom-left, bottom-right): four more buttons |
 | L2 / R2 / both | Hold for the second, third and fourth layer of buttons (Alt / Ctrl / Alt+Ctrl underneath) |
 | Left stick | Move; a slight tilt walks, all the way runs |
 | Right stick | Left/right turns, up/down tilts the camera (inverted) |
@@ -27,6 +28,12 @@ Defaults on the base layer (drop a spell on one to replace it; right-click turns
 and clear target) · L1 target nearest friend · R1 target nearest enemy.
 
 While you hold L2/R2, mouse clicks are Alt-/Ctrl-clicks, as with the real keys.
+
+**Menus from the controller:** while loot, a quest or an NPC's dialog is open, the D-pad moves a gold
+highlight through its options, ✕ picks one, □ does the main thing (loot all, accept, complete) and ○
+closes it. Your spells are back on those buttons when it closes.
+
+Spells on the pad show their cooldown, and tint red while your target is out of range.
 
 ## Requirements
 
@@ -54,7 +61,9 @@ WoW client calls them (the Mac client renames some, e.g. F13 is PRINTSCREEN). Sa
 
 - **Assign:** drag a spell, item or macro onto a button. To fill a layer, hold L2/R2 while you drag,
   or click the layer's tab under the pad.
-- **Clear:** right-click a button.
+- **WoW actions:** right-click a button for a menu of them (world map, character, bags, spellbook,
+  quest log, talents, …); the button then shows a short label like MAP or BAGS.
+- **Clear:** right-click a button → Clear.
 - **Move:** drag the dots above the pad. `/padbar lock` locks it, `/padbar reset` recenters it,
   `/padbar` hides/shows it.
 
