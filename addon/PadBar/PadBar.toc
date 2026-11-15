@@ -1,0 +1,7 @@
+## Interface: 16001, 16002, 16003, 16100, 16101, 16200
+## Title: PadBar
+## Notes: A PS5 controller as plain keys (wow-pad): a tiny gamepad of your spells. Drag a spell onto a button; right-click clears. /padbar
+## Version: 1.0
+## SavedVariables: PadBarKeys
+## SavedVariablesPerCharacter: PadBarDB
+PadBar.lua
