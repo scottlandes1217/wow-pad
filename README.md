@@ -23,7 +23,7 @@ types, and the PadBar addon binds those keys to your spells and draws the pad.
 | Right stick | Left/right turns, up/down tilts the camera (inverted) |
 | Options | Escape |
 
-Defaults on the base layer (drop a spell on one to replace it; right-click turns it off):
+Defaults on the base layer (drop a spell on one to replace it; right-click → Clear turns it off):
 ✕ Jump · □ Interact (with what's in front of you) · ○ Back (close an NPC dialog, else stop attacking
 and clear target) · L1 target nearest friend · R1 target nearest enemy.
 
