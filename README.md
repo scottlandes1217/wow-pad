@@ -20,12 +20,12 @@ types, and the PadBar addon binds those keys to your spells and draws the pad.
 | Touchpad | Click a quadrant (top-left, top-right, bottom-left, bottom-right): four more buttons |
 | L2 / R2 / both | Hold for the second, third and fourth layer of buttons (Alt / Ctrl / Alt+Ctrl underneath) |
 | Left stick | Move; a slight tilt walks, all the way runs |
-| Right stick | Left/right turns, up/down tilts the camera (inverted) |
+| Right stick | Moves the camera (up/down inverted). Moving goes where the camera looks, and left/right while you move steers you, like steering with the mouse (the cursor hides meanwhile) |
 | Options | Escape |
 
 Defaults on the base layer (drop a spell on one to replace it; right-click → Clear turns it off):
 ✕ Jump · □ Interact (with what's in front of you) · ○ Back (close an NPC dialog, else stop attacking
-and clear target) · L1 target nearest friend · R1 target nearest enemy.
+and clear target) · L1 target nearest friend · R1 target nearest enemy · L3 auto-run.
 
 While you hold L2/R2, mouse clicks are Alt-/Ctrl-clicks, as with the real keys.
 
@@ -33,7 +33,8 @@ While you hold L2/R2, mouse clicks are Alt-/Ctrl-clicks, as with the real keys.
 highlight through its options, ✕ picks one, □ does the main thing (loot all, accept, complete) and ○
 closes it. Your spells are back on those buttons when it closes.
 
-Spells on the pad show their cooldown, and tint red while your target is out of range.
+Spells on the pad show their cooldown, tint red while your target is out of range, and darken while you
+can't use them (blue: not enough mana, rage, …).
 
 ## Requirements
 
@@ -76,8 +77,8 @@ WoW client calls them (the Mac client renames some, e.g. F13 is PRINTSCREEN). Sa
 
 ## Tuning
 
-- `pad.swift`, top: stick deadzone, walk/run threshold. Rebuild with `./build.sh`.
-- `addon/PadBar/PadBar.lua`, top: camera tilt speed (`PITCH_SPEED`), inverted tilt (`INVERT_Y`).
+- `pad.swift`, top: stick deadzone, diagonal angle, walk/run threshold, steering speed. Rebuild with `./build.sh`.
+- `addon/PadBar/PadBar.lua`, top: camera speeds (`YAW_SPEED`, `PITCH_SPEED`), inverted tilt (`INVERT_Y`).
   Copy the addon into WoW again (`./install.sh`) and `/reload`.
 
 ## How walk/run stays right
@@ -85,7 +86,8 @@ WoW client calls them (the Mac client renames some, e.g. F13 is PRINTSCREEN). Sa
 WoW has only a run/walk toggle, which addons can't press. wow-pad sends what the stick *wants*
 (a "walk" or a "run" key); PadBar, which reads from your speed whether you're walking, binds only the
 one that would change your mode to the toggle. Asking for the mode you're in does nothing, so it can't
-drift. In combat WoW won't let addons rebind, so a change made mid-fight is corrected after it.
+drift. wow-pad repeats its request while you hold the stick, so a mode that slipped is put right. In combat WoW
+won't let addons rebind, so walk/run doesn't switch during a fight; it catches up right after.
 
 ## Uninstall
 

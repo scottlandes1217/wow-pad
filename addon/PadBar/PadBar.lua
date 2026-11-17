@@ -9,9 +9,11 @@ local MEDIA = "Interface\\AddOns\\" .. ADDON .. "\\media\\"
 local ORDER = { "cross", "circle", "square", "triangle", "up", "down", "left", "right",
                 "l1", "r1", "l3", "r3", "create", "touch", "fwd", "back", "sleft", "sright", "walk",
                 "tleft", "tright", "pup", "pdown", "run" }
-local MOVES = { fwd = "MOVEFORWARD", back = "MOVEBACKWARD", sleft = "STRAFELEFT", sright = "STRAFERIGHT",
-                tleft = "TURNLEFT", tright = "TURNRIGHT" }
+local MOVES = { fwd = "MOVEFORWARD", back = "MOVEBACKWARD", sleft = "STRAFELEFT", sright = "STRAFERIGHT" }
+local YAW_SPEED = 1       -- right stick left/right: camera turn speed (MoveViewLeft/Right; the character doesn't turn)
 local PITCH_SPEED = 0.5   -- right stick up/down: camera tilt speed (MoveViewUp/Down)
+local STEER = true        -- moving goes where the camera looks (mouselook; see Steer)
+local SNAP_TIME = 0.2    -- seconds of mouselook that turn you to face the camera when you start moving
 local INVERT_Y = true     -- stick up tilts the camera down (as flight controls do)
 
 -- id, glyph texture (or text), x, y, size: two diamonds, bumpers above, sticks/center below
@@ -31,16 +33,49 @@ local GLYPH_COLOR = { cross = { 0.45, 0.65, 1 }, circle = { 1, 0.4, 0.4 }, squar
 local LAYERS = { { "", "Base" }, { "ALT-", "L2" }, { "CTRL-", "R2" }, { "ALT-CTRL-", "L2+R2" } }
 
 local owner = CreateFrame("Frame")
--- camera tilt while the key is held (MoveView* is allowed from addon code; TurnLeftStart isn't, so
--- turning goes through WoW's TURNLEFT/TURNRIGHT bindings above)
-local pitch = {}
-for id, dir in pairs(INVERT_Y and { pup = "Down", pdown = "Up" } or { pup = "Up", pdown = "Down" }) do
+-- Moving goes where the camera looks: when you start moving, mouselook turns you to face the camera.
+-- While you move and turn with the right stick it stays on and wow-pad moves the mouse, so you steer
+-- like with a mouse. (WoW hides the cursor during mouselook; swapping the stick to WoW's turn binding
+-- while moving instead left turns stuck on.)
+local yawHeld, ours, snapUntil = 0, false, 0
+local function Steer()
+    if not STEER then return end
+    local want = IsPlayerMoving() and yawHeld > 0
+    if want and not IsMouselooking() then MouselookStart() ours = true
+    -- (cutting the start-of-move turn short left you half turned; ResetCursor: else macOS's arrow can stay)
+    elseif not want and ours and GetTime() >= snapUntil then MouselookStop() ResetCursor() ours = false end
+end
+-- the right stick moves only the camera while its key is held (MoveView* is allowed from addon code).
+-- Left/right while you move: no MoveView; Steer holds mouselook and wow-pad moves the mouse, which turns
+-- you and the camera together. `held`/`viewing` let a hold switch between the two as you start/stop.
+local view = { tleft = "Right", tright = "Left" }   -- MoveViewLeft swings the camera so the view turns right
+for id, dir in pairs(INVERT_Y and { pup = "Down", pdown = "Up" } or { pup = "Up", pdown = "Down" }) do view[id] = dir end
+local held, viewing = {}, {}
+local function View(dir, on)
+    if viewing[dir] == on then return end
+    viewing[dir] = on
+    if on then _G["MoveView" .. dir .. "Start"]((dir == "Left" or dir == "Right") and YAW_SPEED or PITCH_SPEED)
+    else _G["MoveView" .. dir .. "Stop"]() end
+end
+local function YawMode()
+    local moving = STEER and IsPlayerMoving()
+    View("Left", held.Left and not moving or false)
+    View("Right", held.Right and not moving or false)
+end
+local steer = CreateFrame("Frame")
+steer:SetScript("OnUpdate", function() if yawHeld > 0 then YawMode() end end)
+for id, dir in pairs(view) do
     local b = CreateFrame("Button", "PadBarPitch" .. dir, UIParent)
     b:RegisterForClicks("AnyDown", "AnyUp")
     b:SetScript("OnClick", function(_, _, down)
-        if down then _G["MoveView" .. dir .. "Start"](PITCH_SPEED) else _G["MoveView" .. dir .. "Stop"]() end
+        held[dir] = down
+        if dir == "Left" or dir == "Right" then
+            yawHeld = (held.Left and 1 or 0) + (held.Right and 1 or 0)
+            YawMode()
+            Steer()
+        else View(dir, down) end
     end)
-    pitch[id] = b
+    view[id] = b
 end
 local pad, slots, secure = nil, {}, {}
 local editLayer, pending = 1, false
@@ -55,7 +90,8 @@ local function Print(msg) print("|cff7fb2ffPadBar|r: " .. msg) end
 -- right-click turns it off)
 local BACK = { type = "macrotext", back = true, icon = "act_back", name = "Back: close an NPC dialog, else stop attacking and clear target",
                text = "/stopattack\n/cleartarget" }
-local DEFAULTS = { cross = "JUMP", square = "INTERACTTARGET", l1 = "TARGETNEARESTFRIEND", r1 = "TARGETNEARESTENEMY", circle = BACK }
+local DEFAULTS = { cross = "JUMP", square = "INTERACTTARGET", l1 = "TARGETNEARESTFRIEND", r1 = "TARGETNEARESTENEMY", circle = BACK,
+                   l3 = "TOGGLEAUTORUN" }
 local BINDING_ICONS = {   -- our own (media/act_*), so WoW actions don't look like spells
     JUMP = MEDIA .. "act_jump", INTERACTTARGET = MEDIA .. "act_interact",
     TARGETNEARESTFRIEND = MEDIA .. "act_friend", TARGETNEARESTENEMY = MEDIA .. "act_enemy",
@@ -165,14 +201,16 @@ local function ApplySecure(layer, id)
     btn:SetAttribute("macro", a and a.type == "macro" and a.id or nil)
 end
 
--- only the request that changes the mode is bound (touching just these two, so held keys stay held)
-local function ApplyWalk()
+-- only the request that changes the mode is bound (touching just these two, so held keys stay held).
+-- In combat neither is: bindings can't follow a switch there, and wow-pad repeats its request while you
+-- hold the stick, which would flip you back and forth. Set as combat starts (still allowed then).
+local function ApplyWalk(fight)
     if InCombatLockdown() then pending = true return end
     local walk, run = Key("walk"), Key("run")
-    walkBound = walking and run or walk
+    walkBound = not fight and (walking and run or walk) or nil
     for _, l in ipairs(LAYERS) do
-        if walk then SetOverrideBinding(owner, true, l[1] .. walk, not walking and "TOGGLERUN" or nil) end
-        if run then SetOverrideBinding(owner, true, l[1] .. run, walking and "TOGGLERUN" or nil) end
+        if walk then SetOverrideBinding(owner, true, l[1] .. walk, not fight and not walking and "TOGGLERUN" or nil) end
+        if run then SetOverrideBinding(owner, true, l[1] .. run, not fight and walking and "TOGGLERUN" or nil) end
     end
 end
 
@@ -278,9 +316,10 @@ local function Highlight()
     return list
 end
 
--- Out of range: the icon tints red, as on the action bars. In combat the answer can be a secret value
+-- Out of range: the icon tints red, as on the action bars; unusable: darkened (blue: not enough power). In combat the answer can be a secret value
 -- addons can't test, so it goes straight to SetAlphaFromBoolean.
 local OOR = 0.5
+local UNUSABLE = 0.6
 local function UpdateRange()
     if not pad or not pad:IsShown() then return end
     local layer, target = ShownLayer(), UnitExists("target")
@@ -290,6 +329,17 @@ local function UpdateRange()
         if target and a and a.type == "spell" and C_Spell and C_Spell.IsSpellInRange then r = C_Spell.IsSpellInRange(a.id, "target") end
         if issecretvalue and issecretvalue(r) then s.oor:SetAlphaFromBoolean(r, 0, OOR)
         else s.oor:SetAlpha(r == false and OOR or 0) end
+        -- can't be used now (Mongoose Bite before a dodge, say): darkened; not enough power: blue
+        local usable, noPower = true, false
+        if a and a.type == "spell" and C_Spell and C_Spell.IsSpellUsable then usable, noPower = C_Spell.IsSpellUsable(a.id)
+        elseif a and a.type == "item" and C_Item and C_Item.IsUsableItem then usable, noPower = C_Item.IsUsableItem(a.id) end
+        if issecretvalue and (issecretvalue(usable) or issecretvalue(noPower)) then
+            s.nu:SetVertexColor(0, 0, 0, 1)
+            if issecretvalue(usable) then s.nu:SetAlphaFromBoolean(usable, 0, UNUSABLE) else s.nu:SetAlpha(usable and 0 or UNUSABLE) end
+        else
+            if noPower then s.nu:SetVertexColor(0.1, 0.15, 0.6, 1) else s.nu:SetVertexColor(0, 0, 0, 1) end
+            s.nu:SetAlpha(usable and 0 or UNUSABLE)
+        end
     end
 end
 
@@ -340,6 +390,16 @@ local function UpdateMenu()
     if menuMode then Highlight() else hl:Hide() end
 end
 
+steer:RegisterEvent("PLAYER_STARTED_MOVING")
+steer:RegisterEvent("PLAYER_STOPPED_MOVING")
+steer:SetScript("OnEvent", function(_, event)
+    if not STEER then return end
+    if event == "PLAYER_STARTED_MOVING" and not IsMouselooking() then
+        MouselookStart() ours = true
+        snapUntil = GetTime() + SNAP_TIME
+        C_Timer.After(SNAP_TIME, Steer)   -- (one frame can be too short to finish a big turn)
+    else Steer() end
+end)
 local function ApplyAll()
     if InCombatLockdown() then pending = true return end
     pending = false
@@ -353,7 +413,7 @@ local function ApplyAll()
             local key = Key(id)
             if key then SetOverrideBinding(owner, true, l[1] .. key, action) end
         end
-        for id, b in pairs(pitch) do
+        for id, b in pairs(view) do
             local key = Key(id)
             if key then SetOverrideBindingClick(owner, true, l[1] .. key, b:GetName(), "LeftButton") end
         end
@@ -526,6 +586,10 @@ local function Build()
         s.oor:SetDrawLayer("ARTWORK", 2)
         s.oor:SetPoint("CENTER")
         s.oor:SetAlpha(0)
+        s.nu = Disc(s, "ARTWORK", size - 4, 0, 0, 0, 1)   -- can't-use-now tint (alpha set by UpdateRange)
+        s.nu:SetDrawLayer("ARTWORK", 3)
+        s.nu:SetPoint("CENTER")
+        s.nu:SetAlpha(0)
         s.cd = CreateFrame("Cooldown", nil, s, "CooldownFrameTemplate")
         s.cd:SetPoint("CENTER")
         s.cd:SetSize(size - 4, size - 4)
@@ -631,6 +695,7 @@ end)
 
 owner:RegisterEvent("PLAYER_LOGIN")
 owner:RegisterEvent("PLAYER_REGEN_ENABLED")
+owner:RegisterEvent("PLAYER_REGEN_DISABLED")
 owner:RegisterEvent("MODIFIER_STATE_CHANGED")
 owner:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 owner:RegisterEvent("BAG_UPDATE_COOLDOWN")
@@ -640,6 +705,7 @@ owner:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
         PadBarDB = PadBarDB or {}
         PadBarDB.assign = PadBarDB.assign or {}
+        PadBarDB.steerLog = nil   -- (a removed debug log)
         MakeSecure()
         Build()
         ApplyAll()
@@ -659,8 +725,10 @@ owner:SetScript("OnEvent", function(_, event)
             SetCVar("GamePadEnable", "0")
             Print("turned off WoW's own controller support (wow-pad drives the controller). /reload to clear the Gamepad UI.")
         end
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        ApplyWalk(true)
     elseif event == "PLAYER_REGEN_ENABLED" then
-        if pending then ApplyAll() Refresh() end
+        if pending then ApplyAll() Refresh() else ApplyWalk() end
     else
         Refresh()
         UpdateRange()   -- (a new target, or L2/R2 showing another layer)

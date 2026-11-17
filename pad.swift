@@ -1,15 +1,17 @@
 // wow-pad: a PS5 / any controller as plain keys for WoW, so WoW never sees a gamepad (its Gamepad UI
 // taints with map addons). Each button is one fixed key nobody types; the PadBar addon binds them.
-// L2/R2 hold Alt/Ctrl (the addon's layers), the left stick walks/runs, the right stick turns (WoW's
-// turn bindings) and tilts the camera (the addon's MoveView calls), Options is Escape. Only while WoW is the frontmost app.
+// L2/R2 hold Alt/Ctrl (the addon's layers), the left stick walks/runs, the right stick moves the camera
+// (the addon's MoveView calls), Options is Escape. Only while WoW is the frontmost app.
 import AppKit
 import GameController
 
 // calibration knobs
 let deadzone: Float = 0.25        // stick travel ignored
-let moveAt: Float = 0.35          // stick axis that counts as a direction
+let diagonalAt: Float = 0.6       // sine of how far off straight the left stick goes before it's diagonal (0.6 = 37°)
 let runAt: Float = 0.75           // stick tilt that runs (below: walks)
-let tick = 1.0 / 60
+let lookAt: Float = 0.2           // right stick axis that moves the camera
+let steerSpeed: Float = 1500      // mouse movement per second at full right-stick tilt while running (turn speed)
+let tick = 1.0 / 120
 
 // macOS virtual key codes. Buttons: F13-F19 then keypad keys; the addon maps the same names.
 enum K {
@@ -59,29 +61,48 @@ func set(_ code: CGKeyCode, _ isDown: Bool) {
     post(code, isDown)
 }
 
-// Right stick: turn left/right, tilt the camera up/down (keys the addon binds)
-func look(_ x: Float, _ y: Float) {
+// Right stick: turn and tilt the camera (keys the addon binds). While the left stick moves you, PadBar
+// holds mouselook on that key, and left/right also moves the mouse: WoW then turns you and the camera
+// together, exactly as when steering with the mouse.
+var turnRest: Float = 0, lastTurn = CFAbsoluteTimeGetCurrent()
+func look(_ x: Float, _ y: Float, moving: Bool) {
     let on = hypotf(x, y) > deadzone
-    set(K.kpPlus, on && x < -moveAt); set(K.kpMinus, on && x > moveAt)
-    set(K.kpClear, on && y > moveAt); set(K.kpEquals, on && y < -moveAt)
+    set(K.kpPlus, on && x < -lookAt); set(K.kpMinus, on && x > lookAt)
+    set(K.kpClear, on && y > lookAt); set(K.kpEquals, on && y < -lookAt)
+    let now = CFAbsoluteTimeGetCurrent(), dt = Float(min(now - lastTurn, 0.05)); lastTurn = now
+    guard moving, on, abs(x) > lookAt, let here = CGEvent(source: nil)?.location else { turnRest = 0; return }
+    turnRest += x * steerSpeed * dt   // by the time that really passed: the timer isn't exact
+    let dx = turnRest.rounded(.towardZero); turnRest -= dx
+    guard dx != 0, let e = CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: here, mouseButton: .left)
+    else { return }
+    e.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx))
+    e.flags = flags
+    e.post(tap: .cghidEventTap)
 }
 
 // Left stick: movement keys, and walk (slight tilt) or run (full tilt). WoW has only a run/walk
 // toggle, so this sends what the stick wants (kpDivide: walk, kp2: run) and PadBar, which knows from
 // your speed which mode you're in, binds only the one that changes it to the toggle.
 var wantWalk: Bool?
-var settling: Bool?, settled = 0
-let settleTicks = 9   // ~0.15 s in one zone before asking (pushing to full passes through "walk")
+var settling: Bool?, settled = 0, asked = 0.0
+let askAgain = 0.5   // seconds: repeat the request while held, in case the mode slipped (asking for the one you're in does nothing)
+let settleTicks = Int(0.15 / tick)   // 0.15 s in one zone before asking (pushing to full passes through "walk")
 func move(_ x: Float, _ y: Float) {
     let mag = hypotf(x, y)
     let on = mag > deadzone
-    set(K.kp8, on && y > moveAt); set(K.kp5, on && y < -moveAt)
-    set(K.kp4, on && x < -moveAt); set(K.kp6, on && x > moveAt)
+    let nx = x / max(mag, 0.001), ny = y / max(mag, 0.001)   // direction only, however far it's pushed
+    set(K.kp8, on && ny > diagonalAt); set(K.kp5, on && ny < -diagonalAt)
+    set(K.kp4, on && nx < -diagonalAt); set(K.kp6, on && nx > diagonalAt)
     guard on else { wantWalk = nil; settling = nil; return }
     let walk = wantWalk == true ? mag < runAt + 0.05 : mag < runAt - 0.05   // a little hysteresis
-    guard walk != wantWalk else { settling = nil; return }
+    guard walk != wantWalk else {
+        settling = nil
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - asked > askAgain { tap(walk ? K.kpDivide : K.kp2); asked = now }
+        return
+    }
     if walk == settling { settled += 1 } else { settling = walk; settled = 1 }
-    if settled >= settleTicks { tap(walk ? K.kpDivide : K.kp2); wantWalk = walk; settling = nil }
+    if settled >= settleTicks { tap(walk ? K.kpDivide : K.kp2); wantWalk = walk; settling = nil; asked = CFAbsoluteTimeGetCurrent() }
 }
 
 // Touchpad: a click in one of four quadrants, decided by where the finger is when the click starts and
@@ -174,7 +195,7 @@ GCController.shouldMonitorBackgroundEvents = true
 NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { n in
     print("wow-pad: \((n.object as? GCController)?.vendorName ?? "controller") connected")
 }
-Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { _ in
+let loop = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { _ in
     guard wowInFront(), let g = GCController.controllers().compactMap(\.extendedGamepad).first else {
         if !down.isEmpty { releaseAll() }
         return
@@ -184,8 +205,10 @@ Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { _ in
     for (pressed, code) in buttons(g) { set(code, pressed) }
     touchpad(g)
     move(g.leftThumbstick.xAxis.value, g.leftThumbstick.yAxis.value)
-    look(g.rightThumbstick.xAxis.value, g.rightThumbstick.yAxis.value)
+    look(g.rightThumbstick.xAxis.value, g.rightThumbstick.yAxis.value,
+         moving: hypotf(g.leftThumbstick.xAxis.value, g.leftThumbstick.yAxis.value) > deadzone)
 }
+loop.tolerance = 0
 // L2/R2 hold Alt/Ctrl only virtually: the real mouse's events would still say "not held", and WoW
 // would drop the layer the moment the mouse moves (dragging a spell onto it, say). While a trigger is
 // held, add its modifier to the mouse's events too.
